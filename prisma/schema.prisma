@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Wallets - parties that can hold custody
+model Wallet {
+  id              String   @id @default(uuid())
+  walletId        String   @unique @map("wallet_id") // External ID
+  
+  // Owner info
+  ownerType       String   @map("owner_type") // INDIVIDUAL, CARRIER, LOCKER, WAREHOUSE
+  ownerName       String   @map("owner_name")
+  ownerId         String?  @map("owner_id") // Firebase UID or org ID
+  
+  // Cryptographic identity
+  publicKeyPem    String   @map("public_key_pem")
+  
+  // Status
+  status          String   @default("ACTIVE") // ACTIVE, SUSPENDED, REVOKED
+  
+  // Metadata
+  metadata        Json?
+  
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  shipmentsAsSender     Shipment[] @relation("ShipmentSender")
+  shipmentsAsRecipient  Shipment[] @relation("ShipmentRecipient")
+  custodyTokensHeld     CustodyToken[] @relation("CurrentCustodian")
+  challengesFrom        HandoffChallenge[] @relation("ChallengeFrom")
+  challengesTo          HandoffChallenge[] @relation("ChallengeTo")
+  
+  @@map("wallets")
+  @@index([ownerType])
+  @@index([status])
+}
+
+// Shipments - the high-level transport job
+model Shipment {
+  id              String   @id @default(uuid())
+  shipmentNumber  String   @unique @map("shipment_number") // Human-readable
+  
+  // Asset
+  assetId         String   @map("asset_id")
+  assetDescription String? @map("asset_description")
+  declaredValueMicros String? @map("declared_value_micros") // BigInt as string
+  currency        String   @default("USD")
+  
+  // Parties
+  senderWalletId  String   @map("sender_wallet_id")
+  senderWallet    Wallet   @relation("ShipmentSender", fields: [senderWalletId], references: [id])
+  recipientWalletId String @map("recipient_wallet_id")
+  recipientWallet Wallet   @relation("ShipmentRecipient", fields: [recipientWalletId], references: [id])
+  
+  // Anchor
+  anchorId        String?  @map("anchor_id")
+  sealId          String?  @map("seal_id")
+  anchorStatus    String?  @map("anchor_status") // ARMED, BROKEN
+  
+  // Insurance (Protect integration)
+  protectPolicyId String?  @map("protect_policy_id")
+  protectQuoteId  String?  @map("protect_quote_id")
+  insured         Boolean  @default(false)
+  
+  // Route
+  originAddress   String?  @map("origin_address")
+  originGeo       Json?    @map("origin_geo") // { lat_e7, lon_e7 }
+  destinationAddress String? @map("destination_address")
+  destinationGeo  Json?    @map("destination_geo")
+  
+  // Status
+  status          String   @default("CREATED") // CREATED, SEALED, IN_TRANSIT, DELIVERED, DISPUTED, CLOSED
+  
+  // Timestamps
+  estimatedPickup DateTime? @map("estimated_pickup")
+  actualPickup    DateTime? @map("actual_pickup")
+  estimatedDelivery DateTime? @map("estimated_delivery")
+  actualDelivery  DateTime? @map("actual_delivery")
+  
+  // Ledger sync
+  ledgerEventId   String?  @map("ledger_event_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  custodyToken    CustodyToken?
+  events          ShipmentEvent[]
+  
+  @@map("shipments")
+  @@index([assetId])
+  @@index([anchorId])
+  @@index([status])
+}
+
+// Custody Tokens - represents who holds the asset
+model CustodyToken {
+  id              String   @id @default(uuid())
+  custodyTokenId  String   @unique @map("custody_token_id") // External ID for API
+  
+  // Shipment reference
+  shipmentId      String   @unique @map("shipment_id")
+  shipment        Shipment @relation(fields: [shipmentId], references: [id])
+  
+  // Asset
+  assetId         String   @map("asset_id")
+  
+  // Current holder
+  currentCustodianId String @map("current_custodian_id")
+  currentCustodian Wallet  @relation("CurrentCustodian", fields: [currentCustodianId], references: [id])
+  
+  // State machine
+  state           String   @default("OFFERED_FOR_PICKUP") // OFFERED_FOR_PICKUP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, DISPUTED, CLOSED
+  lastTransitionAt DateTime @map("last_transition_at")
+  
+  // Chain of custody count
+  handoffCount    Int      @default(0) @map("handoff_count")
+  
+  // Ledger sync
+  ledgerEventId   String?  @map("ledger_event_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  challenges      HandoffChallenge[]
+  
+  @@map("custody_tokens")
+  @@index([assetId])
+  @@index([state])
+}
+
+// Handoff Challenges - initiated by FROM party
+model HandoffChallenge {
+  id              String   @id @default(uuid())
+  challengeId     String   @unique @map("challenge_id") // External ID
+  
+  // Token reference
+  custodyTokenId  String   @map("custody_token_id")
+  custodyToken    CustodyToken @relation(fields: [custodyTokenId], references: [id])
+  
+  // Parties
+  fromWalletId    String   @map("from_wallet_id")
+  fromWallet      Wallet   @relation("ChallengeFrom", fields: [fromWalletId], references: [id])
+  toWalletId      String   @map("to_wallet_id")
+  toWallet        Wallet   @relation("ChallengeTo", fields: [toWalletId], references: [id])
+  
+  // Challenge data
+  nonce           String
+  expiresAt       DateTime @map("expires_at")
+  
+  // Geo snapshot
+  geoSnapshot     Json?    @map("geo_snapshot")
+  
+  // Condition snapshot (photos with hashes)
+  conditionSnapshot Json?  @map("condition_snapshot") // Array of { url, sha256 }
+  
+  // Signatures
+  fromSignature   String   @map("from_signature")
+  toSignature     String?  @map("to_signature") // Filled when accepted
+  
+  // Status
+  status          String   @default("PENDING") // PENDING, ACCEPTED, EXPIRED, CANCELLED
+  acceptedAt      DateTime? @map("accepted_at")
+  
+  // Ledger sync
+  ledgerEventId   String?  @map("ledger_event_id")
+  acceptLedgerEventId String? @map("accept_ledger_event_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@map("handoff_challenges")
+  @@index([custodyTokenId])
+  @@index([status])
+}
+
+// Shipment Events - audit trail
+model ShipmentEvent {
+  id              String   @id @default(uuid())
+  
+  shipmentId      String   @map("shipment_id")
+  shipment        Shipment @relation(fields: [shipmentId], references: [id])
+  
+  eventType       String   @map("event_type") // CREATED, SEALED, PICKUP, HANDOFF, DELIVERY, DISPUTE, etc.
+  description     String?
+  
+  // Actor
+  actorWalletId   String?  @map("actor_wallet_id")
+  
+  // Location
+  geoSnapshot     Json?    @map("geo_snapshot")
+  
+  // Anchor event reference
+  anchorEventId   String?  @map("anchor_event_id")
+  
+  // Payload
+  payload         Json?
+  
+  // Ledger sync
+  ledgerEventId   String?  @map("ledger_event_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@map("shipment_events")
+  @@index([shipmentId])
+  @@index([eventType])
+}
+
+// Anchor Events consumed from Anchors service
+model AnchorEvent {
+  id              String   @id @default(uuid())
+  anchorId        String   @map("anchor_id")
+  eventType       String   @map("event_type")
+  
+  payload         Json
+  eventTimestamp  DateTime @map("event_timestamp")
+  
+  // Impact
+  shipmentId      String?  @map("shipment_id")
+  custodyTokenId  String?  @map("custody_token_id")
+  riskImpact      String?  @map("risk_impact") // NONE, MINOR, MAJOR, CRITICAL
+  
+  // Processing
+  processed       Boolean  @default(false)
+  processedAt     DateTime? @map("processed_at")
+  
+  ledgerEventId   String   @map("ledger_event_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@map("anchor_events")
+  @@index([anchorId])
+  @@index([shipmentId])
+  @@index([processed])
+}
+
+// Audit log
+model AuditLog {
+  id              String   @id @default(uuid())
+  action          String
+  resourceType    String   @map("resource_type")
+  resourceId      String?  @map("resource_id")
+  actorId         String?  @map("actor_id")
+  details         Json?
+  ipAddress       String?  @map("ip_address")
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@map("audit_log")
+  @@index([action])
+  @@index([resourceType, resourceId])
+}
