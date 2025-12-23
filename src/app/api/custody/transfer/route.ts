@@ -3,11 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { HandoffAcceptanceSchema } from "@/shared/contracts/src";
 import { canonicalize, stripSig, verifyEd25519 } from "@/shared/crypto/src";
 import { MockLedgerClient } from "@/shared/ledger-client/src/mock";
+import { LiveLedgerClient } from "@/shared/ledger-client/src/live";
 import { validateTransition, CustodyState } from "@/logic/stateMachine";
 import { WalletRegistry } from "@/logic/walletRegistry";
 import { LedgerView } from "@/logic/ledgerView";
 
-const ledger = new MockLedgerClient();
+const USE_REAL_LEDGER = process.env.USE_REAL_LEDGER === "true";
+const ledger = USE_REAL_LEDGER ? new LiveLedgerClient() : new MockLedgerClient();
 
 export async function POST(req: NextRequest) {
     try {
