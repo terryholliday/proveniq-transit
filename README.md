@@ -1,5 +1,16 @@
 # PROVENIQ Transit
 
+> **STATUS: ABSORBED INTO PROVENIQ LEDGER**
+> 
+> Transit functionality is now implemented as Ledger event types:
+> - `TRANSIT_SHIPMENT_CREATED`
+> - `TRANSIT_HANDOFF_CHALLENGE_CREATED`
+> - `TRANSIT_HANDOFF_ACCEPTED`
+> - `TRANSIT_DELIVERY_CONFIRMED`
+> 
+> Schemas: `proveniq-main/packages/contracts/src/v1/transit.schema.ts`
+> See `proveniq-main/INTER_APP_CONTRACT.md` for current architecture.
+
 **The Chain — Secure Custody Logistics**
 
 Cryptographically verified chain-of-custody for physical assets with Ed25519 signature verification.
